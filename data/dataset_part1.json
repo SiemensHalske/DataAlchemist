@@ -1,0 +1,26 @@
+{
+  "data_entry": {
+    "source": "Twitter",
+    "author_information": {
+      "age": 30,
+      "occupation": "Software Developer",
+      "gender": "Male"
+    },
+    "sentiment_score": 0.85,
+    "topics": ["Technology", "Innovation", "Startups"],
+    "language": "English",
+    "engagement_metrics": {
+      "likes": 120,
+      "shares": 35,
+      "comments": 47
+    },
+    "statement_length": 140,
+    "emotional_tone": "Positive",
+    "intent": "Informative",
+    "response": {
+      "initial": "Thanks for the update! Looking forward to this.",
+      "timestamp": "2023-11-06T10:15:30Z"
+    },
+    "timestamp_of_data_entry": "2023-11-06T11:00:00Z"
+  }
+}
