@@ -38,23 +38,13 @@ class TransformerBlock(nn.Module):
 
         """
 
-        # Input shape: (seq_len, batch_size)
-
-        # Embed the input tokens and add positional encodings
         embedded_input = self.embedding(
             input) + self.positional_encodings(input)
-
-        # Attention layer expects shape: (seq_len, batch_size, embedding_dim)
         attention_output, _ = self.attention(
             embedded_input, embedded_input, embedded_input)
 
-        # Apply normalization and residual connection
         x = self.norm1(embedded_input + self.dropout(attention_output))
-
-        # Feed-forward layer
         feed_forward_output = self.feed_forward(x)
-
-        # Apply normalization and residual connection
         output = self.norm2(x + self.dropout(feed_forward_output))
 
         return output
