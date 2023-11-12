@@ -1,122 +1,79 @@
-import json
+from transformers import LongformerTokenizer, LongformerForSequenceClassification
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
-from transformers import BertTokenizer, AdamW, get_linear_schedule_with_warmup
-# Make sure to import your actual TransformerBlock
-from alchemist_transformerBlock import TransformerBlock
+import pandas as pd
+import torch.optim as optim
 
-# Load and preprocess the data
-with open('dataset.json', 'r') as file:
-    data = json.load(file)
-    # Adjust based on the actual format of your JSON
-    dataset = [entry for entry in data.values()]
+# Paths to your dataset files
+train_dataset_paths = [
+    'C:\\Users\\Hendrik\\Documents\\Github\\DataAlchemist\\data\\dataset_part1.parquet',
+    'C:\\Users\\Hendrik\\Documents\\Github\\DataAlchemist\\data\\dataset_part2.parquet',
+    'C:\\Users\\Hendrik\\Documents\\Github\\DataAlchemist\\data\\dataset_part3.parquet'
+]
+val_dataset_path = 'C:\\Users\\Hendrik\\Documents\\Github\\DataAlchemist\\data\\dataset_part4.parquet'
 
-# Preprocess the data to extract prompts and responses
-prompts = [' '.join(entry['topics']) + ' ' + entry['intent']
-           for entry in dataset]
-responses = [entry['response']['initial'] for entry in dataset]
+# Initialize the tokenizer with a pre-trained Longformer model
+tokenizer = LongformerTokenizer.from_pretrained('allenai/longformer-base-4096')
 
-# Tokenization
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-
-
-class TextGenerationDataset(Dataset):
-    def __init__(self, prompts, responses, tokenizer, max_length):
-        self.prompts = prompts
-        self.responses = responses
-        self.tokenizer = tokenizer
-        self.max_length = max_length
+# Custom Dataset Class
+class TextDataset(Dataset):
+    def __init__(self, texts, labels, tokenizer, max_length=4096):
+        self.encodings = tokenizer(texts, truncation=True, padding='max_length', max_length=max_length, return_tensors='pt')
+        self.labels = labels
 
     def __len__(self):
-        return len(self.prompts)
+        return len(self.labels)
 
     def __getitem__(self, idx):
-        # Tokenize and encode the prompt and response texts
-        encoded_pair = tokenizer.encode_plus(
-            self.prompts[idx],
-            self.responses[idx],
-            add_special_tokens=True,
-            max_length=self.max_length,
-            padding='max_length',
-            truncation=True,
-            return_attention_mask=True
-        )
-        return {
-            'input_ids': torch.tensor(encoded_pair['input_ids'], dtype=torch.long),
-            'attention_mask': torch.tensor(encoded_pair['attention_mask'], dtype=torch.long),
-            # Labels are the input_ids for language modeling
-            'labels': torch.tensor(encoded_pair['input_ids'], dtype=torch.long)
-        }
+        item = {key: val[idx] for key, val in self.encodings.items()}
+        item['labels'] = torch.tensor(self.labels[idx])
+        return item
 
+# Function to load datasets and return DataLoader
+def load_dataset(file_path, tokenizer):
+    df = pd.read_parquet(file_path)
+    prompts = df['prompt'].tolist()
+    responses = df['response'].tolist()
+    dataset = TextDataset(prompts, responses, tokenizer)
+    loader = DataLoader(dataset, batch_size=1, shuffle=True)  # Adjust batch size as needed
+    return loader
 
-# Instantiate dataset and dataloader
-max_length = 512  # Maximum sequence length
-train_dataset = TextGenerationDataset(
-    prompts, responses, tokenizer, max_length)
-train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+# Load the training and validation datasets
+train_loaders = [load_dataset(path, tokenizer) for path in train_dataset_paths]
+val_loader = load_dataset(val_dataset_path, tokenizer)
 
-# Define the Transformer model architecture
+# Initialize the Longformer model for sequence classification
+model = LongformerForSequenceClassification.from_pretrained('allenai/longformer-base-4096', num_labels=2)  # Update num_labels as needed
+model.train()
 
+# Define the optimizer
+optimizer = optim.AdamW(model.parameters(), lr=1e-5)
 
-class TextGeneratorModel(nn.Module):
-    def __init__(self, transformer_block, tokenizer, num_transformer_blocks):
-        super(TextGeneratorModel, self).__init__()
-        self.tokenizer = tokenizer
-        self.transformer_blocks = nn.ModuleList([
-            transformer_block for _ in range(num_transformer_blocks)
-        ])
-        self.vocab_size = len(tokenizer.vocab)
-        self.output_layer = nn.Linear(
-            transformer_block.hidden_size, self.vocab_size)
-
-    def forward(self, input_ids, attention_mask=None):
-        x = input_ids
-        for block in self.transformer_blocks:
-            x = block(x)
-
-        logits = self.output_layer(x)
-        return logits
-
-
-# Initialize the model
-hidden_size = 768
-num_attention_heads = 12
-num_embeddings = tokenizer.vocab_size
-transformer_block = TransformerBlock(
-    hidden_size, num_attention_heads, num_embeddings)
-model = TextGeneratorModel(
-    transformer_block, tokenizer, num_transformer_blocks=1)
-
-# Define loss function, optimizer, and scheduler
-criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id)
-optimizer = AdamW(model.parameters(), lr=5e-5)
-scheduler = get_linear_schedule_with_warmup(optimizer,
-                                            num_warmup_steps=0,
-                                            num_training_steps=len(train_dataloader) * 3)  # Adjust epochs accordingly
-
-
-# Training loop
-def train(model, dataloader, optimizer, criterion, scheduler, epochs):
-    model.train()
-    for epoch in range(epochs):
-        for batch in dataloader:
+# Training and validation loop
+num_epochs = 3  # Define the number of epochs
+for epoch in range(num_epochs):
+    print(f"Epoch {epoch+1}/{num_epochs}")
+    # Training loop
+    for i, loader in enumerate(train_loaders):
+        print(f"Training on dataset {i+1}/{len(train_loaders)}")
+        for j, batch in enumerate(loader):
             optimizer.zero_grad()
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
-            labels = batch['labels']
-            outputs = model(input_ids, attention_mask)
-            logits = outputs.view(-1, model.vocab_size)
-            loss = criterion(logits, labels.view(-1))
+            outputs = model(**{k: v.to(model.device) for k, v in batch.items()})
+            loss = outputs.loss
             loss.backward()
             optimizer.step()
-            scheduler.step()
-        print(f'Epoch {epoch} completed. Loss: {loss.item()}')
+            print(f"Training loss for batch {j+1}/{len(loader)}: {loss.item()}")
+    
+    # Validation loop
+    model.eval()
+    val_loss = 0
+    with torch.no_grad():
+        for k, batch in enumerate(val_loader):
+            outputs = model(**{k: v.to(model.device) for k, v in batch.items()})
+            val_loss += outputs.loss.item()
+            print(f"Validation loss for batch {k+1}/{len(val_loader)}: {outputs.loss.item()}")
+    val_loss /= len(val_loader)
+    print(f"Validation loss: {val_loss}")
 
-
-# Assume we have the same training dataloader
-epochs = 3  # Define the number of epochs
-train(model, train_dataloader, optimizer, criterion, scheduler, epochs)
-
-# Save the model after training
-torch.save(model.state_dict(), 'text_generator_model.pth')
+# Save the trained model
+model.save_pretrained('path/to/save/model')
